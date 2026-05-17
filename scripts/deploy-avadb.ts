@@ -1,50 +1,63 @@
 import { ethers } from "hardhat";
-import { deployVerifiers, deployLibrary } from "../test/helpers";
 
 /**
- * Deployment script for AvaDB
+ * Deploys the AvaDBStorage contract along with a fresh Registrar.
  *
- * AvaDB relies on the same Registrar used by EncryptedERC so that users
- * who are already registered in the eERC ecosystem can interact with the
- * database without an extra registration step.
- *
- * Deploy order:
- *  1. ZK verifiers (Registration verifier is required by Registrar)
- *  2. BabyJubJub library
- *  3. Registrar
- *  4. AvaDB
- *
- * Set isProd = true to use the production verifiers (trusted-setup zkeys).
+ * Usage:
+ *   npx hardhat run scripts/deploy-avadb.ts --network avadb
+ *   npx hardhat run scripts/deploy-avadb.ts --network avalanche
+ *   npx hardhat run scripts/deploy-avadb.ts --network localhost
  */
 const main = async () => {
   const [deployer] = await ethers.getSigners();
 
-  console.log("Deploying AvaDB contracts...");
-  console.log("Deployer:", deployer.address);
+  console.log("Deploying AvaDB contracts with account:", deployer.address);
+  console.log(
+    "Account balance:",
+    ethers.formatEther(await ethers.provider.getBalance(deployer.address)),
+    "AVAX",
+  );
 
-  // ── 1. Deploy ZK verifiers ──────────────────────────────────────────────
-  // isProd = false → uses the locally-compiled circuit verifiers
-  const { registrationVerifier } = await deployVerifiers(deployer);
+  // ── 1. Deploy RegistrationVerifier (reuse prod verifier) ───────────────────
+  const RegistrationVerifierFactory = await ethers.getContractFactory(
+    "RegistrationCircuitGroth16Verifier",
+  );
+  const registrationVerifier = await RegistrationVerifierFactory.connect(
+    deployer,
+  ).deploy();
+  await registrationVerifier.waitForDeployment();
+  console.log(
+    "RegistrationVerifier deployed to:",
+    await registrationVerifier.getAddress(),
+  );
 
-  // ── 2. Deploy BabyJubJub library ────────────────────────────────────────
-  const babyJubJub = await deployLibrary(deployer);
-
-  // ── 3. Deploy Registrar ─────────────────────────────────────────────────
-  const registrarFactory = await ethers.getContractFactory("Registrar");
-  const registrar = await registrarFactory.deploy(registrationVerifier);
+  // ── 2. Deploy Registrar ─────────────────────────────────────────────────────
+  const RegistrarFactory = await ethers.getContractFactory("Registrar");
+  const registrar = await RegistrarFactory.connect(deployer).deploy(
+    await registrationVerifier.getAddress(),
+  );
   await registrar.waitForDeployment();
+  console.log("Registrar deployed to:", await registrar.getAddress());
 
-  // ── 4. Deploy AvaDB ─────────────────────────────────────────────────────
-  const avaDBFactory = await ethers.getContractFactory("AvaDB");
-  const avaDB = await avaDBFactory.deploy(registrar.target);
-  await avaDB.waitForDeployment();
+  // ── 3. Deploy AvaDBStorage ──────────────────────────────────────────────────
+  const AvaDBStorageFactory = await ethers.getContractFactory("AvaDBStorage");
+  const avaDBStorage = await AvaDBStorageFactory.connect(deployer).deploy(
+    await registrar.getAddress(),
+  );
+  await avaDBStorage.waitForDeployment();
+  console.log("AvaDBStorage deployed to:", await avaDBStorage.getAddress());
 
-  console.log("\n─── AvaDB Deployment Summary ───────────────────────────────");
+  // ── 4. Print deployment summary ─────────────────────────────────────────────
+  console.log("\n══════════════════════════════════════════════");
+  console.log("AvaDB Deployment Summary");
+  console.log("══════════════════════════════════════════════");
   console.table({
-    registrationVerifier,
-    babyJubJub,
-    registrar: registrar.target,
-    avaDB: avaDB.target,
+    network: (await ethers.provider.getNetwork()).name,
+    chainId: (await ethers.provider.getNetwork()).chainId.toString(),
+    deployer: deployer.address,
+    registrationVerifier: await registrationVerifier.getAddress(),
+    registrar: await registrar.getAddress(),
+    avaDBStorage: await avaDBStorage.getAddress(),
   });
 };
 
